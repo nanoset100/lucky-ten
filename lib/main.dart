@@ -66,7 +66,9 @@ class _CommandmentCardPageState extends State<CommandmentCardPage> {
     final memo = memoController.text.trim();
     if (memo.isNotEmpty && cards.isNotEmpty) {
       final card = cards[currentCardIndex];
-      final newMemo = {'id': card['id'], 'title': card['title'], 'memo': memo};
+      final now = DateTime.now();  // ✅ 추가
+      final formattedDate = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+      final newMemo = {'id': card['id'], 'title': card['title'], 'memo': memo,'date': formattedDate,};
       memos.add(newMemo);
       await prefs.setString('memos', jsonEncode(memos));
       memoController.clear();
@@ -94,59 +96,55 @@ class _CommandmentCardPageState extends State<CommandmentCardPage> {
   }
 
   void showAllMemos() {
-    showDialog(
-      context: context,
-      builder:
-          (_) => AlertDialog(
-            title: const Text('📚 전체 메모 보기'),
-            content: SizedBox(
-              width: double.maxFinite,
-              child: ListView(
-                shrinkWrap: true,
-                children:
-                    memos.reversed.map((memo) {
-                      return ListTile(
-                        title: Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(4),
-                              decoration: BoxDecoration(
-                                color: Colors.deepPurple.shade100,
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: const Text(
-                                '📝',
-                                style: TextStyle(fontSize: 16),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                memo['title'],
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        subtitle: Text(memo['memo']),
-                      );
-                    }).toList(),
+  showDialog(
+    context: context,
+    builder: (_) => AlertDialog(
+      title: const Text('📚 전체 메모 보기'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: ListView.builder(
+          itemCount: memos.length,
+          itemBuilder: (context, index) {
+            final memo = memos.reversed.toList()[index];
+            final String title = memo['title'] ?? '';
+            final String content = memo['memo'] ?? '';
+            final String date = memo['date']?.substring(0, 10) ?? '날짜 없음';
+
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '📝 $title',
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    content,
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '📅 $date',
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                  const Divider(height: 20, thickness: 1),
+                ],
               ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text(
-                  '닫기',
-                  style: TextStyle(color: Colors.deepPurple),
-                ),
-              ),
-            ],
-          ),
-    );
-  }
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('닫기', style: TextStyle(color: Colors.deepPurple)),
+        ),
+      ],
+    ),
+  );
+}
 
   @override
   Widget build(BuildContext context) {
