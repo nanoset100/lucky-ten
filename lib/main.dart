@@ -1,16 +1,27 @@
 import 'dart:convert';
 import 'dart:math';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:logger/logger.dart';
+
+final logger = Logger();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Supabase.initialize(
-    url: 'https://sevdrykubdoynryfahjm.supabase.co',
-    anonKey:
-        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNldmRyeWt1YmRveW5yeWZhaGptIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDM4MzE1NzEsImV4cCI6MjA1OTQwNzU3MX0.TBYdyW6krJu6NP2Yhr6E8-CoDy6_bcc48hY1oEDguxY',
-  );
+  try {
+    await dotenv.load(fileName: ".env");
+    logger.i('ENV loaded successfully');
+    await Supabase.initialize(
+      url: dotenv.env['SUPABASE_URL']!,
+      anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
+    );
+    logger.i('Supabase initialized successfully');
+  } catch (e) {
+    logger.e('초기화 중 오류 발생: $e');
+  }
   runApp(const LuckyTenCommandmentsApp());
 }
 
@@ -39,6 +50,8 @@ class _CommandmentCardPageState extends State<CommandmentCardPage> {
   List<Map<String, dynamic>> cards = [];
   TextEditingController memoController = TextEditingController();
   List<Map<String, dynamic>> memos = [];
+  bool isLoading = true;
+  String? errorMessage;
 
   @override
   void initState() {
@@ -48,16 +61,52 @@ class _CommandmentCardPageState extends State<CommandmentCardPage> {
   }
 
   Future<void> fetchCardsFromSupabase() async {
-    final response = await Supabase.instance.client.from('cards').select();
-    final fetchedCards = List<Map<String, dynamic>>.from(response);
-
-    if (fetchedCards.isNotEmpty) {
-      final random = Random();
-      final randomIndex = random.nextInt(fetchedCards.length);
+    try {
       setState(() {
-        cards = fetchedCards;
-        currentCardIndex = randomIndex;
+        isLoading = true;
+        errorMessage = null;
       });
+
+      final response = await Supabase.instance.client
+          .from('cards')
+          .select()
+          .timeout(
+            const Duration(seconds: 10),
+            onTimeout: () {
+              throw TimeoutException('서버 연결 시간이 초과되었습니다.');
+            },
+          );
+
+      logger.i('Fetched ${response.length} cards from Supabase');
+      final fetchedCards = List<Map<String, dynamic>>.from(response);
+
+      if (fetchedCards.isNotEmpty) {
+        final random = Random();
+        final randomIndex = random.nextInt(fetchedCards.length);
+        setState(() {
+          cards = fetchedCards;
+          currentCardIndex = randomIndex;
+          isLoading = false;
+        });
+      } else {
+        setState(() {
+          errorMessage = '카드를 불러올 수 없습니다.\n잠시 후 다시 시도해주세요.';
+          isLoading = false;
+        });
+        logger.w('No cards found in the response');
+      }
+    } catch (e) {
+      setState(() {
+        if (e is TimeoutException) {
+          errorMessage = '서버 연결 시간이 초과되었습니다.\n네트워크 연결을 확인하고 다시 시도해주세요.';
+        } else if (e.toString().contains('connection')) {
+          errorMessage = '네트워크 연결을 확인해주세요.\n인터넷이 연결되어 있는지 확인 후 다시 시도해주세요.';
+        } else {
+          errorMessage = '오류가 발생했습니다.\n잠시 후 다시 시도해주세요.';
+        }
+        isLoading = false;
+      });
+      logger.e('Error fetching cards: $e');
     }
   }
 
@@ -66,9 +115,15 @@ class _CommandmentCardPageState extends State<CommandmentCardPage> {
     final memo = memoController.text.trim();
     if (memo.isNotEmpty && cards.isNotEmpty) {
       final card = cards[currentCardIndex];
-      final now = DateTime.now();  // ✅ 추가
-      final formattedDate = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
-      final newMemo = {'id': card['id'], 'title': card['title'], 'memo': memo,'date': formattedDate,};
+      final now = DateTime.now(); // ✅ 추가
+      final formattedDate =
+          "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+      final newMemo = {
+        'id': card['id'],
+        'title': card['title'],
+        'memo': memo,
+        'date': formattedDate,
+      };
       memos.add(newMemo);
       await prefs.setString('memos', jsonEncode(memos));
       memoController.clear();
@@ -90,68 +145,132 @@ class _CommandmentCardPageState extends State<CommandmentCardPage> {
           });
         }
       } catch (e) {
-        print('Error decoding memo data: $e');
+        logger.e('Error decoding memo data: $e');
       }
     }
   }
 
   void showAllMemos() {
-  showDialog(
-    context: context,
-    builder: (_) => AlertDialog(
-      title: const Text('📚 전체 메모 보기'),
-      content: SizedBox(
-        width: double.maxFinite,
-        child: ListView.builder(
-          itemCount: memos.length,
-          itemBuilder: (context, index) {
-            final memo = memos.reversed.toList()[index];
-            final String title = memo['title'] ?? '';
-            final String content = memo['memo'] ?? '';
-            final String date = memo['date']?.substring(0, 10) ?? '날짜 없음';
+    showDialog(
+      context: context,
+      builder:
+          (_) => AlertDialog(
+            title: const Text('📚 전체 메모 보기'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: ListView.builder(
+                itemCount: memos.length,
+                itemBuilder: (context, index) {
+                  final memo = memos.reversed.toList()[index];
+                  final String title = memo['title'] ?? '';
+                  final String content = memo['memo'] ?? '';
+                  final String date = memo['date']?.substring(0, 10) ?? '날짜 없음';
 
-            return Padding(
-              padding: const EdgeInsets.symmetric(vertical: 10.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '📝 $title',
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    content,
-                    style: const TextStyle(fontSize: 13),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '📅 $date',
-                    style: const TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                  const Divider(height: 20, thickness: 1),
-                ],
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 10.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '📝 $title',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(content, style: const TextStyle(fontSize: 13)),
+                        const SizedBox(height: 4),
+                        Text(
+                          '📅 $date',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
+                        ),
+                        const Divider(height: 20, thickness: 1),
+                      ],
+                    ),
+                  );
+                },
               ),
-            );
-          },
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('닫기', style: TextStyle(color: Colors.deepPurple)),
-        ),
-      ],
-    ),
-  );
-}
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text(
+                  '닫기',
+                  style: TextStyle(color: Colors.deepPurple),
+                ),
+              ),
+            ],
+          ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    if (isLoading) {
+      return Scaffold(
+        backgroundColor: const Color(0xffdcd0f7),
+        body: const Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 16),
+              Text('카드를 불러오는 중입니다...', style: TextStyle(fontSize: 16)),
+              Text(
+                '잠시만 기다려주세요.',
+                style: TextStyle(fontSize: 14, color: Colors.grey),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (errorMessage != null) {
+      return Scaffold(
+        backgroundColor: const Color(0xffdcd0f7),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.error_outline, size: 48, color: Colors.red),
+                const SizedBox(height: 16),
+                Text(
+                  errorMessage!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 16),
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton.icon(
+                  onPressed: fetchCardsFromSupabase,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('다시 시도'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.deepPurple,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 12,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     if (cards.isEmpty) {
       return const Scaffold(
         backgroundColor: Color(0xffdcd0f7),
-        body: Center(child: CircularProgressIndicator()),
+        body: Center(child: Text('카드를 불러올 수 없습니다. 잠시 후 다시 시도해주세요.')),
       );
     }
 
